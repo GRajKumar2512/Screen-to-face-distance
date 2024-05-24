@@ -1,7 +1,6 @@
 package com.example.safedistance
 
 import android.Manifest
-import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.PointF
 import android.hardware.Camera
@@ -10,6 +9,8 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -77,25 +78,46 @@ class MainActivity : ComponentActivity() {
         }
 
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 1);
-            Toast.makeText(this, "Grant Permission and restart app", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Please grant permission to the camera", Toast.LENGTH_SHORT).show()
+            cameraPermissionRequestLauncher.launch(Manifest.permission.CAMERA)
         } else {
-            val camera: Camera? = frontCam()
-            var camparams = camera?.getParameters()
-            if (camparams != null) {
-                focalLength = camparams.focalLength
-                angleX = camparams.horizontalViewAngle
-                angleY = camparams.verticalViewAngle
-                sensorX =  (Math.tan(Math.toRadians((angleX / 2).toDouble())) * 2 * focalLength).toFloat();
-                sensorY =  (Math.tan(Math.toRadians((angleY / 2).toDouble())) * 2 * focalLength).toFloat();
-            }
-            if (camera != null){
-                camera.stopPreview();
-                camera.release();
-            }
-            createCameraSource()
+            initializeParamsAndLaunchCamera()
         }
     }
+
+    private fun initializeParamsAndLaunchCamera() {
+        val camera: Camera? = frontCam()
+        var camparams = camera?.getParameters()
+        if (camparams != null) {
+            focalLength = camparams.focalLength
+            angleX = camparams.horizontalViewAngle
+            angleY = camparams.verticalViewAngle
+            sensorX =
+                (Math.tan(Math.toRadians((angleX / 2).toDouble())) * 2 * focalLength).toFloat();
+            sensorY =
+                (Math.tan(Math.toRadians((angleY / 2).toDouble())) * 2 * focalLength).toFloat();
+        }
+        if (camera != null) {
+            camera.stopPreview();
+            camera.release();
+        }
+        createCameraSource()
+    }
+
+    private val cameraPermissionRequestLauncher: ActivityResultLauncher<String> =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted: Boolean ->
+            if (isGranted) {
+                // Permission granted: proceed with opening the camera
+                initializeParamsAndLaunchCamera()
+            } else {
+                // Permission denied: inform the user to enable it through settings
+                Toast.makeText(
+                    this,
+                    "Go to settings and enable camera permission to use this app",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
 
     private fun frontCam(): Camera? {
         var cameraCount = 0
