@@ -50,9 +50,6 @@ class MainActivity : ComponentActivity() {
         const val IMAGE_WIDTH = 1024
         const val IMAGE_HEIGHT = 1024
 
-        const val RIGHT_EYE = 0
-        const val LEFT_EYE = 1
-
         const val AVERAGE_EYE_DISTANCE = 63 // in mm
     }
 
@@ -66,8 +63,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        val context: Context = getApplicationContext();
 
         setContent {
             SafeDistanceTheme {
@@ -88,11 +83,11 @@ class MainActivity : ComponentActivity() {
             val camera: Camera? = frontCam()
             var camparams = camera?.getParameters()
             if (camparams != null) {
-                F = camparams.focalLength
+                focalLength = camparams.focalLength
                 angleX = camparams.horizontalViewAngle
                 angleY = camparams.verticalViewAngle
-                sensorX =  (Math.tan(Math.toRadians((angleX / 2).toDouble())) * 2 * F).toFloat();
-                sensorY =  (Math.tan(Math.toRadians((angleY / 2).toDouble())) * 2 * F).toFloat();
+                sensorX =  (Math.tan(Math.toRadians((angleX / 2).toDouble())) * 2 * focalLength).toFloat();
+                sensorY =  (Math.tan(Math.toRadians((angleY / 2).toDouble())) * 2 * focalLength).toFloat();
             }
             if (camera != null){
                 camera.stopPreview();
@@ -142,9 +137,9 @@ class MainActivity : ComponentActivity() {
 
                         var distance: Float
                         distance = if (deltaX >= deltaY) {
-                            F * (AVERAGE_EYE_DISTANCE / sensorX) * (IMAGE_WIDTH / deltaX)
+                            focalLength * (AVERAGE_EYE_DISTANCE / sensorX) * (IMAGE_WIDTH / deltaX)
                         } else {
-                            F * (AVERAGE_EYE_DISTANCE / sensorY) * (IMAGE_HEIGHT / deltaY)
+                            focalLength * (AVERAGE_EYE_DISTANCE / sensorY) * (IMAGE_HEIGHT / deltaY)
                         }
 
                         eyeDistance.value = "distance: " + String.format("%.0f", distance) + "mm"
