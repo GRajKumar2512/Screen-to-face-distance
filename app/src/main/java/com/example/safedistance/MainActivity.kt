@@ -53,13 +53,13 @@ class MainActivity : ComponentActivity() {
         const val AVERAGE_EYE_DISTANCE = 63 // in mm
     }
 
-    var F = 1f //focal length
-    var sensorX: Float = 0f
-    var sensorY: Float = 0f
-    var angleX: Float = 0f
-    var angleY: Float = 0f
+    private var focalLength: Float = 1f
+    private var sensorX: Float = 0f
+    private var sensorY: Float = 0f
+    private var angleX: Float = 0f
+    private var angleY: Float = 0f
 
-    var eyeDistance: MutableState<String?> = mutableStateOf("")
+    private var eyeDistance: MutableState<String?> = mutableStateOf("")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
