@@ -1,15 +1,20 @@
 package com.example.safedistance
 
 import android.Manifest
+import android.app.AlertDialog
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.PointF
-import android.hardware.Camera
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.os.Bundle
 import android.util.Log
+import android.util.SizeF
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,39 +40,52 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
+import com.example.safedistance.exception.NoAccessToCameraException
+import com.example.safedistance.exception.NoFocalLengthInfoException
+import com.example.safedistance.exception.NoFrontCameraException
+import com.example.safedistance.exception.NoSensorSizeException
 import com.example.safedistance.ui.theme.SafeDistanceTheme
 import com.google.mlkit.vision.camera.CameraSourceConfig
 import com.google.mlkit.vision.camera.CameraXSource
 import com.google.mlkit.vision.face.FaceDetection
+import com.google.mlkit.vision.face.FaceDetector
 import com.google.mlkit.vision.face.FaceDetectorOptions
 import com.google.mlkit.vision.face.FaceLandmark
 import java.io.IOException
 import kotlin.math.abs
-
 
 class MainActivity : ComponentActivity() {
     companion object{
         const val IMAGE_WIDTH = 1024
         const val IMAGE_HEIGHT = 1024
 
-        const val RIGHT_EYE = 0
-        const val LEFT_EYE = 1
-
         const val AVERAGE_EYE_DISTANCE = 63 // in mm
     }
 
-    var F = 1f //focal length
-    var sensorX: Float = 0f
-    var sensorY: Float = 0f
-    var angleX: Float = 0f
-    var angleY: Float = 0f
+    private var focalLength: Float = 0f
+    private var sensorX: Float = 0f
+    private var sensorY: Float = 0f
 
-    var eyeDistance: MutableState<String?> = mutableStateOf("")
+    private var outputMessage: MutableState<String?> = mutableStateOf("")
+
+    private val cameraPermissionRequestLauncher: ActivityResultLauncher<String> =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted: Boolean ->
+            if (isGranted) {
+                // Permission granted: proceed with opening the camera
+                initializeParams()
+                createCameraSource()
+            } else {
+                // Permission denied: inform the user to enable it through settings
+                Toast.makeText(
+                    this,
+                    "Go to settings and enable camera permission to use this app",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        val context: Context = getApplicationContext();
 
         setContent {
             SafeDistanceTheme {
@@ -76,91 +94,105 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    ScreenDistanceView(eyeDistance)
+                    ScreenDistanceView(outputMessage)
                 }
             }
         }
 
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 1);
-            Toast.makeText(this, "Grant Permission and restart app", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Please grant permission to the camera", Toast.LENGTH_SHORT).show()
+            cameraPermissionRequestLauncher.launch(Manifest.permission.CAMERA)
         } else {
-            val camera: Camera? = frontCam()
-            var camparams = camera?.getParameters()
-            if (camparams != null) {
-                F = camparams.focalLength
-                angleX = camparams.horizontalViewAngle
-                angleY = camparams.verticalViewAngle
-                sensorX =  (Math.tan(Math.toRadians((angleX / 2).toDouble())) * 2 * F).toFloat();
-                sensorY =  (Math.tan(Math.toRadians((angleY / 2).toDouble())) * 2 * F).toFloat();
-            }
-            if (camera != null){
-                camera.stopPreview();
-                camera.release();
-            }
+            initializeParams()
             createCameraSource()
         }
     }
 
-    private fun frontCam(): Camera? {
-        var cameraCount = 0
-        var cam: Camera? = null
-        val cameraInfo = Camera.CameraInfo()
-        cameraCount = Camera.getNumberOfCameras()
-        for (camIdx in 0 until cameraCount) {
-            Camera.getCameraInfo(camIdx, cameraInfo)
-            Log.v("CAMID", camIdx.toString() + "")
-            if (cameraInfo.facing === Camera.CameraInfo.CAMERA_FACING_FRONT) {
-                try {
-                    cam = Camera.open(camIdx)
-                } catch (e: RuntimeException) {
-                    Log.e("FAIL", "Camera failed to open: " + e.localizedMessage)
+    private fun initializeParams() {
+        val cameraManager = getSystemService(CAMERA_SERVICE) as CameraManager
+
+        try {
+            val cameraId = getFrontCameraId(this)
+            val cameraCharacteristics = cameraManager.getCameraCharacteristics(cameraId)
+
+            val focalLengths: FloatArray? = cameraCharacteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            assignFocalLength(focalLengths, cameraId)
+
+            val sensorSize = cameraCharacteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            assignSensorXY(sensorSize, cameraId)
+        } catch (e: NoFrontCameraException) {
+            showErrorDialog("No Front Camera",
+                "This device does not have a front camera. " +
+                        "The application will now close.")
+        } catch (e: NoSensorSizeException) {
+            showErrorDialog("No Sensor size info",
+                "This camera doesn't get an information about sensor size. " +
+                        "The application will now close.")
+        } catch (e: NoFocalLengthInfoException) {
+            showErrorDialog("No focal length info",
+                "This camera doesn't have an information about focal length. " +
+                        "The application will now close.")
+        }
+    }
+
+    @Throws(NoSensorSizeException::class)
+    private fun assignSensorXY(sensorSize: SizeF?, cameraId: String) {
+        if (sensorSize != null) {
+            sensorX = sensorSize.width
+            sensorY = sensorSize.height
+        } else {
+            throw NoSensorSizeException(
+                "For camera: $cameraId Sensor size info isn't available."
+            )
+        }
+    }
+
+    @Throws(NoFocalLengthInfoException::class)
+    private fun assignFocalLength(focalLengths: FloatArray?, cameraId: String) {
+        if (focalLengths != null && focalLengths.isNotEmpty()) {
+            // Retrieving the first focal length
+            // TODO add select for user if not correct value
+            focalLength = focalLengths[0]
+        } else {
+            throw NoFocalLengthInfoException(
+                "For camera: $cameraId Focal Length info isn't available."
+            )
+        }
+    }
+
+    @Throws(NoFrontCameraException::class)
+    private fun getFrontCameraId(context: Context): String {
+        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        try {
+            for (cameraId in cameraManager.cameraIdList) {
+                val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+                val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
+                if (lensFacing != null && lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+                    return cameraId
                 }
             }
+        } catch (e: Exception) {
+            throw NoFrontCameraException("Error accessing camera: ${e.message}")
         }
-        return cam
+        throw NoAccessToCameraException("No front camera found")
+    }
+
+    private fun showErrorDialog(title: String, message: String) {
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setPositiveButton(android.R.string.ok) { _, _ -> finish() }
+            .setOnDismissListener { finish() }
+            .show()
     }
 
     private fun createCameraSource(){
-        // High-accuracy landmark detection and face classification
-        val highAccuracyOpts = FaceDetectorOptions.Builder()
-            .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
-            .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
-            .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
-            .build()
+        val highAccuracyOpts = faceDetectorOptions()
         val detector = FaceDetection.getClient(highAccuracyOpts)
 
-        val cameraSourceConfig = CameraSourceConfig.Builder(this, detector){
-            it.addOnSuccessListener { faces ->
-                for(face in faces){
-                    val leftEyePos: PointF? = face.getLandmark(FaceLandmark.LEFT_EYE)?.position
-                    val rightEyePos: PointF? = face.getLandmark(FaceLandmark.RIGHT_EYE)?.position
+        val cameraSourceConfig = cameraSourceConfig(detector)
 
-                    if(leftEyePos != null && rightEyePos != null){
-                        val deltaX : Float = abs(leftEyePos.x - rightEyePos.x)
-                        val deltaY : Float = abs(leftEyePos.y - rightEyePos.y)
-
-                        var distance: Float
-                        distance = if (deltaX >= deltaY) {
-                            F * (AVERAGE_EYE_DISTANCE / sensorX) * (IMAGE_WIDTH / deltaX)
-                        } else {
-                            F * (AVERAGE_EYE_DISTANCE / sensorY) * (IMAGE_HEIGHT / deltaY)
-                        }
-
-                        eyeDistance.value = "distance: " + String.format("%.0f", distance) + "mm"
-
-//                        Toast.makeText(this , eyeDistance, Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-
-            it.addOnFailureListener{e ->
-                e.printStackTrace()
-            }
-
-        }.setFacing(CameraSourceConfig.CAMERA_FACING_FRONT).build()
-
-        val cameraXSource = CameraXSource(cameraSourceConfig);
+        val cameraXSource = CameraXSource(cameraSourceConfig)
         Log.d("MyCamera", "createCameraSource: ${cameraXSource.previewSize}")
 
         try {
@@ -174,22 +206,70 @@ class MainActivity : ComponentActivity() {
             cameraXSource.start()
         } catch (e: IOException) {
             e.printStackTrace()
+            showErrorDialog(e.cause?.message?:"Camera failure!", e.message?: "No extra message")
         }
     }
 
+    private fun cameraSourceConfig(detector: FaceDetector): CameraSourceConfig {
+        val cameraSourceConfig = CameraSourceConfig.Builder(this, detector) {
+            it.addOnSuccessListener { faces ->
+                outputMessage.value = "No face detection!"
+                for (face in faces) {
+                    val leftEyePos: PointF? = face.getLandmark(FaceLandmark.LEFT_EYE)?.position
+                    val rightEyePos: PointF? = face.getLandmark(FaceLandmark.RIGHT_EYE)?.position
+
+                    if (leftEyePos != null && rightEyePos != null) {
+                        val deltaX: Float = abs(leftEyePos.x - rightEyePos.x)
+                        val deltaY: Float = abs(leftEyePos.y - rightEyePos.y)
+
+                        val distance: Float = if (deltaX >= deltaY) {
+                            focalLength * (AVERAGE_EYE_DISTANCE / sensorX) * (IMAGE_WIDTH / deltaX)
+                        } else {
+                            focalLength * (AVERAGE_EYE_DISTANCE / sensorY) * (IMAGE_HEIGHT / deltaY)
+                        }
+
+                        outputMessage.value = "Distance: %.0f mm".format(distance)
+                    }
+                }
+            }
+
+            it.addOnFailureListener { e ->
+                e.printStackTrace()
+                showErrorDialog(
+                    "Problem with calculate distance",
+                    e.message ?: "No extra info"
+                )
+            }
+
+        }.setFacing(CameraSourceConfig.CAMERA_FACING_FRONT).build()
+        return cameraSourceConfig
+    }
+
+    private fun faceDetectorOptions(): FaceDetectorOptions {
+        val highAccuracyOpts = FaceDetectorOptions.Builder()
+            .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
+            .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
+            .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
+            .build()
+        return highAccuracyOpts
+    }
+
     @Composable
-    fun ScreenDistanceView(distance: MutableState<String?>){
+    fun ScreenDistanceView(message: MutableState<String?>){
+        val backgroundColor = Color.Black
+        val boxColor = Color(0xFF222222)
+        val textColor = Color.White
 
         Column (modifier = Modifier
-            .background(Color.Black)
+            .background(backgroundColor)
             .fillMaxSize()){
-            Text(text = "Screen Distance", fontWeight = FontWeight.Bold, modifier = Modifier.offset(x = 16.dp, y = 10.dp), fontSize = 24.sp, color = Color.White)
+            Text(text = "Screen Distance", fontWeight = FontWeight.Bold, modifier = Modifier.offset(x = 16.dp, y = 10.dp), fontSize = 24.sp, color = textColor)
             Box(modifier = Modifier
                 .fillMaxWidth()
                 .height(400.dp)
                 .shadow(10.dp)
                 .padding(16.dp)
-                .background(Color(0xFF222222), shape = RoundedCornerShape(25.dp))
+                .background(boxColor, shape = RoundedCornerShape(25.dp))
             ) {
                 Column(
                     modifier = Modifier
@@ -197,60 +277,12 @@ class MainActivity : ComponentActivity() {
                         .height(400.dp),
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally
-
                 ) {
-                    Text(text = distance.value!!.ifEmpty{"0"}, color = Color.White)
+                    Text(text = message.value!!.ifEmpty{"Please look at the front camera"}, color = textColor)
                     Spacer(modifier = Modifier.height(16.dp))
-                    Text(text = "Hold the phone straight.", color = Color.White)
+                    Text(text = "Hold the phone straight.", color = textColor)
                 }
             }
         }
     }
 }
-
-/*
-    private fun frontCam(context: Context): CameraDevice? {
-        var cameraDevice: CameraDevice? = null
-        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        try {
-            val cameraIdList = cameraManager.cameraIdList
-            for (cameraId in cameraIdList) {
-                val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-                val facing = characteristics.get(CameraCharacteristics.LENS_FACING)
-                if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
-                    try {
-                        if (ActivityCompat.checkSelfPermission(
-                                this,
-                                Manifest.permission.CAMERA
-                            ) != PackageManager.PERMISSION_GRANTED
-                        ) {
-                            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 1);
-                        }
-
-                        cameraManager.openCamera(cameraId, object : android.hardware.camera2.CameraDevice.StateCallback() {
-                            override fun onOpened(camera: android.hardware.camera2.CameraDevice) {
-                                cameraDevice = camera
-                            }
-
-                            override fun onDisconnected(camera: android.hardware.camera2.CameraDevice) {
-                                camera.close()
-                                cameraDevice = null
-                            }
-
-                            override fun onError(camera: android.hardware.camera2.CameraDevice, error: Int) {
-                                camera.close()
-                                cameraDevice = null
-                                Log.e("FAIL", "Camera failed to open: $error")
-                            }
-                        }, null)
-                    } catch (e: CameraAccessException) {
-                        Log.e("FAIL", "Camera access exception: ${e.localizedMessage}")
-                    }
-                }
-            }
-        } catch (e: CameraAccessException) {
-            Log.e("FAIL", "Camera access exception: ${e.localizedMessage}")
-        }
-        return cameraDevice
-    }
-     */

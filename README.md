@@ -6,14 +6,14 @@ This Android app calculates the distance between the user's face and the screen 
 
 1. **Grant Camera Permission**: Upon launching the app for the first time, ensure that you grant camera permission to enable distance measurement.
 
-2. **Restart App**: After granting camera permission, it's essential to restart the app. Please remove it from the recent apps list and relaunch it.
+2. **Hold Phone Straight**: For accurate measurement, hold your phone straight, parallel to your face, and ensure that the camera lens is facing you directly.
 
-3. **Hold Phone Straight**: For accurate measurement, hold your phone straight, parallel to your face, and ensure that the camera lens is facing you directly.
-
-4. **Measurement**: Once the app is restarted and the phone is held correctly, the app will start measuring the distance between your face and the screen.
+3. **Measurement**: The app will start measuring the distance between your face and the screen. If face no detection, application display correct info.
 
 ## Acknowledgment
 
-This app is inspired by Ivan Ludwig's blog post on [calculating screen-to-face distance on Android](https://ivanludvig.github.io/tech/calculating-screen-to-face-distance-android). We appreciate his insights and contributions to the Android development community.
+This app is base on [GRajKumar2512](https://github.com/GRajKumar2512/Screen-to-face-distance)'s app. I've updated project to the newest version of API.
 
-For more technical details and insights, please visit Ivan Ludwig's blog.
+This app is inspired by Ivan Ludwig's app: [calculating screen-to-face distance on Android](https://github.com/IvanLudvig/Screen-to-face-distance). We appreciate his insights and contributions to the Android development community.
+
+For more technical details and insights, please visit Ivan Ludwig's [blog](https://ivanludvig.github.io/tech/calculating-screen-to-face-distance-android).
